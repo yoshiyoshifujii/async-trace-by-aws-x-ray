@@ -1,0 +1,95 @@
+service: async-trace-by-aws-x-ray
+
+plugins:
+  - serverless-plugin-tracing
+
+provider:
+  name: aws
+  runtime: java8
+  stage: ${opt:stage}
+  region: ${opt:region}
+  role: arn:aws:iam::535121692824:role/lambda-all-exec-role
+  tracing: true
+
+package:
+  individually: true
+  include:
+    - ../modules/publisher
+    - ../modules/subscriber
+
+functions:
+  publisher:
+    name: publisher-${opt:stage}
+    handler: publisher.App::handleRequest
+    package:
+      artifact: ../modules/publisher/target/scala-2.12/${self:service}-publisher.jar
+    description: ${self:service}
+    tags:
+      CONTEXT: ${self:service}
+    memorySize: 1536
+    timeout: 180
+    environment:
+      env: ${opt:stage}
+      region: ${opt:region}
+      queueUrl: ${self:service}
+
+  subscriberInvoker:
+    name: subscriber-invoker-${opt:stage}
+    handler: subscriber.Invoker::handleRequest
+    package:
+      artifact: ../modules/subscriber/target/scala-2.12/${self:service}-subscriber.jar
+    description: ${self:service}
+    tags:
+      CONTEXT: ${self:service}
+    events:
+     - schedule:
+         name: subscriber-${opt:stage}
+         description: ${self:service}
+         rate: cron(*/1 * * * ? *) # Run every minute.
+         enabled: true
+         stage: ${opt:stage}
+    memorySize: 1536
+    timeout: 180
+    environment:
+      env: ${opt:stage}
+      region: ${opt:region}
+      queueUrl: ${self:service}
+      functionName: subscriber-${opt:stage}
+
+  subscriber:
+    name: subscriber-${opt:stage}
+    handler: subscriber.App::handleRequest
+    package:
+      artifact: ../modules/subscriber/target/scala-2.12/${self:service}-subscriber.jar
+    description: ${self:service}
+    tags:
+      CONTEXT: ${self:service}
+    memorySize: 1536
+    timeout: 180
+    environment:
+      env: ${opt:stage}
+      region: ${opt:region}
+      databaseName: ${self:service}
+
+resources:
+  Resources:
+    Queue:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName:
+          Fn::Sub: "${self:service}"
+        ReceiveMessageWaitTimeSeconds: 20
+    Table:
+      Type: "AWS::DynamoDB::Table"
+      Properties:
+        TableName: "${self:service}"
+        AttributeDefinitions:
+        - AttributeName: "id"
+          AttributeType: "S"
+        KeySchema:
+        - AttributeName: "id"
+          KeyType: "HASH"
+        ProvisionedThroughput:
+          ReadCapacityUnits: "1"
+          WriteCapacityUnits: "1"
+
